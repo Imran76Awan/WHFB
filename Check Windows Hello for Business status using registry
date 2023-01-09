@@ -1,0 +1,12 @@
+$Key = "HKLM:\SOFTWARE\Policies\Microsoft\PassportForWork"
+
+if (Test-Path $Key) {
+    $Value = (Get-ItemProperty -Path $Key -Name "Enabled").Enabled
+    if ($Value -eq 1) {
+        Write-Output "Windows Hello for Business is enabled"
+    } else {
+        Write-Output "Windows Hello for Business is not enabled"
+    }
+} else {
+    Write-Output "Windows Hello for Business is not enabled"
+}
