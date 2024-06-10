@@ -1,0 +1,27 @@
+# Run the dsregcmd command and capture the output
+$output = dsregcmd /status
+
+# Initialize a flag to check for PRT
+$prtPresent = $false
+
+# Parse the output to check for PRT information
+if ($output -match "AzureAdPrt\s*:\s*YES") {
+    $prtPresent = $true
+}
+
+# Get the hostname
+$hostname = $env:COMPUTERNAME
+
+# Get the username
+$username = $env:USERNAME
+
+# Output the result
+if ($prtPresent) {
+    Write-Output "Primary Refresh Token (PRT) is present on this laptop."
+} else {
+    Write-Output "No Primary Refresh Token (PRT) found on this laptop."
+}
+
+# Output the hostname and username
+Write-Output "Hostname: $hostname"
+Write-Output "Username: $username"
