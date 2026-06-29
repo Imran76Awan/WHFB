@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Which Windows Hello gesture did they actually use? Face, fingerprint, PIN or password — and why Microsoft won't tell you</title>
+<meta name="description" content="Microsoft has no report that tells you whether a user signed in with face, fingerprint, PIN or password. Here is how I reverse-engineered the Windows event logs to build one — for a hybrid cloud trust device.">
+<style>
+  :root{
+    --emerald:#059669; --emerald2:#047857; --emerald-light:#d1fae5;
+    --navy:#0a1628; --ink:#0d1b2a; --muted:#64748b; --border:#e2e8f0;
+    --bg:#f8fafc; --white:#fff; --code:#0b1220;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);background:var(--bg);line-height:1.7;font-size:17px}
+  .sysbar{background:#064e3b;color:#6ee7b7;font-size:12.5px;padding:7px 0;text-align:center;letter-spacing:.3px}
+  .wrap{max-width:820px;margin:0 auto;padding:0 22px}
+  header.hero{background:linear-gradient(160deg,#f0fdf9,#ecfdf5,#f8fafc);padding:54px 0 40px;border-bottom:1px solid var(--border)}
+  .kicker{display:inline-block;background:var(--emerald-light);color:var(--emerald2);font-weight:700;
+    font-size:12px;letter-spacing:1px;text-transform:uppercase;padding:5px 12px;border-radius:20px;margin-bottom:18px}
+  h1{font-size:38px;line-height:1.18;margin:0 0 18px;letter-spacing:-.5px}
+  h1 .hl{color:var(--emerald)}
+  .lede{font-size:19px;color:#334155;margin:0}
+  .byline{display:flex;align-items:center;gap:12px;margin-top:26px;font-size:14px;color:var(--muted)}
+  .byline .dot{width:38px;height:38px;border-radius:50%;background:var(--emerald);color:#fff;
+    display:grid;place-items:center;font-weight:700}
+  article{padding:46px 0 30px}
+  article h2{font-size:27px;margin:46px 0 14px;letter-spacing:-.3px;border-left:4px solid var(--emerald);padding-left:14px}
+  article h3{font-size:20px;margin:32px 0 10px}
+  article p{margin:14px 0}
+  a{color:var(--emerald2)}
+  code{background:#eef2f7;border:1px solid var(--border);border-radius:5px;padding:1.5px 6px;
+    font-family:"SF Mono",Consolas,Menlo,monospace;font-size:14px;color:#0f172a}
+  ul,ol{padding-left:22px}
+  li{margin:7px 0}
+  .lead-num{counter-reset:step}
+  table.kv{width:100%;border-collapse:collapse;margin:22px 0;font-size:15px;background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  table.kv th{background:#064e3b;color:#d1fae5;text-align:left;padding:11px 14px;font-size:13px;text-transform:uppercase;letter-spacing:.5px}
+  table.kv td{padding:11px 14px;border-top:1px solid var(--border);vertical-align:top}
+  table.kv tr:nth-child(even) td{background:#f8fafc}
+  .mono{font-family:"SF Mono",Consolas,Menlo,monospace}
+
+  /* code block */
+  pre{background:var(--code);color:#e2e8f0;border-radius:12px;padding:18px 20px;overflow:auto;
+    font-family:"SF Mono",Consolas,Menlo,monospace;font-size:13.5px;line-height:1.6;margin:20px 0}
+  pre .c{color:#64748b} pre .k{color:#7dd3fc} pre .s{color:#86efac} pre .v{color:#fcd34d}
+
+  /* terminal */
+  .terminal,.ps-window{border-radius:12px;overflow:hidden;margin:22px 0;box-shadow:0 8px 24px rgba(2,6,23,.12);font-family:"SF Mono",Consolas,Menlo,monospace}
+  .terminal-bar{background:#1f2937;padding:9px 14px;display:flex;align-items:center;gap:7px}
+  .terminal-dot{width:12px;height:12px;border-radius:50%}
+  .terminal-title{color:#9ca3af;font-size:12px;margin-left:8px}
+  .terminal-body{background:#0b1220;color:#d1d5db;padding:16px 18px;font-size:13.5px;line-height:1.7}
+  .terminal-body .prompt{color:#22c55e} .terminal-body .cmd{color:#e5e7eb}
+  .terminal-body .out{color:#9ca3af} .terminal-body .hit{color:#fcd34d}
+  .ps-bar{background:#1e3a8a;padding:9px 14px;display:flex;align-items:center;gap:7px}
+  .ps-title{color:#bfdbfe;font-size:12px;margin-left:8px}
+  .ps-body{background:#012456;color:#f1f5f9;padding:16px 18px;font-size:13.5px;line-height:1.7;white-space:pre-wrap}
+  .ps-body .ok{color:#86efac} .ps-body .warn{color:#fcd34d}
+
+  /* event viewer */
+  .evt{background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;margin:22px 0}
+  .evt-head{padding:8px 14px;display:flex;align-items:center;gap:8px;color:#fff;font-size:12.5px;font-weight:700}
+  .evt-body{padding:14px 18px;font-family:"SF Mono",Consolas,Menlo,monospace;font-size:13px;line-height:1.95}
+  .evt-body .lbl{color:#6b7280}
+
+  /* breadcrumb */
+  .crumb{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px 20px;margin:20px 0}
+  .crumb-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:13px}
+  .crumb-row .seg{background:#e5e7eb;border-radius:6px;padding:4px 12px;font-weight:600}
+  .crumb-row .seg.act{background:var(--emerald);color:#fff}
+  .crumb-row .sep{color:#9ca3af}
+
+  /* callouts */
+  .callout-red,.callout-green,.callout-blue,.callout-amber{border-radius:10px;padding:14px 18px;margin:20px 0;font-size:15.5px}
+  .callout-red{background:#fef2f2;border-left:4px solid #dc2626}
+  .callout-green{background:#f0fdf4;border-left:4px solid var(--emerald)}
+  .callout-blue{background:#eff6ff;border-left:4px solid #2563eb}
+  .callout-amber{background:#fffbeb;border-left:4px solid #d97706}
+
+  .steps{counter-reset:s;list-style:none;padding-left:0}
+  .steps>li{position:relative;padding:6px 0 6px 46px;margin:12px 0}
+  .steps>li:before{counter-increment:s;content:counter(s);position:absolute;left:0;top:4px;
+    width:30px;height:30px;background:var(--emerald);color:#fff;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px}
+
+  footer{background:#064e3b;color:#a7f3d0;padding:40px 0;margin-top:50px;font-size:14px}
+  footer a{color:#6ee7b7;text-decoration:none}
+  .next-card{background:#fff;border:1px solid var(--border);border-left:4px solid var(--emerald);border-radius:12px;padding:22px 24px;margin:30px 0}
+  .next-card h3{margin:0 0 8px}
+  .tag{display:inline-block;background:var(--emerald-light);color:var(--emerald2);font-size:12px;font-weight:700;padding:3px 10px;border-radius:14px;margin:0 6px 6px 0}
+</style>
+</head>
+<body>
+<div class="sysbar">EndpointWeekly · Deep Dive · Windows Hello for Business · Hybrid Cloud Trust</div>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="kicker">Reverse Engineering</span>
+    <h1>Which Windows Hello gesture did they <span class="hl">actually use</span> to sign in — face, fingerprint, PIN or password?</h1>
+    <p class="lede">Microsoft does not ship a single report that answers this. Entra tells you "Windows Hello for Business" and stops there. So I went into the event logs and built one myself. Here is exactly how the script works and where every number comes from.</p>
+    <div class="byline">
+      <div class="dot">EW</div>
+      <div>EndpointWeekly &middot; 29 June 2026 &middot; ~12 min read &middot; <span class="mono">Get-TodayLogons.ps1</span></div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<article>
+
+<h2>The problem</h2>
+<p>You have rolled out Windows Hello for Business on a <strong>hybrid cloud trust</strong> setup. A user is enrolled for PIN, fingerprint <em>and</em> face. Simple question from your security team:</p>
+<p><em>"Today, when this person signed in — did they use face, fingerprint, PIN, or did they just type their password?"</em></p>
+<p>You open the Entra sign-in logs expecting an answer. You get this:</p>
+
+<div class="crumb">
+  <div class="crumb-row">
+    <span class="seg">Entra admin center</span><span class="sep">&rsaquo;</span>
+    <span class="seg">Users</span><span class="sep">&rsaquo;</span>
+    <span class="seg">Sign-in logs</span><span class="sep">&rsaquo;</span>
+    <span class="seg act">Authentication Details</span>
+  </div>
+</div>
+
+<div class="evt">
+  <div class="evt-head" style="background:#2563eb">Entra ID — Authentication Details</div>
+  <div class="evt-body">
+    <div><span class="lbl">Authentication method:</span> Windows Hello for Business</div>
+    <div><span class="lbl">Authentication method:</span> Windows Hello for Business</div>
+    <div><span class="lbl">Authentication method:</span> Password</div>
+  </div>
+</div>
+
+<p>"Windows Hello for Business." That's it. Face, fingerprint and PIN all collapse into one label. Intune doesn't break it down either. There is no gesture-level report anywhere in the portal — not in Entra, not in Intune, not in the Authentication methods activity blade.</p>
+
+<div class="callout-amber"><strong>Gotcha:</strong> This isn't an oversight Microsoft forgot to fix. From the identity provider's point of view, face, fingerprint and PIN are <em>genuinely indistinguishable</em>. Keep reading — the reason is the whole point.</div>
+
+<h2>Why Microsoft can't show you (the mechanism)</h2>
+<p>Windows Hello for Business does not store three credentials. It stores <strong>one</strong> — an asymmetric key pair, protected by the TPM. Your PIN, your fingerprint and your face are not credentials. They are <strong>three gestures that all unlock the same private key.</strong></p>
+<p>When that key signs the authentication challenge and talks to your DC / Entra, the wire looks <em>identical</em> regardless of which gesture released it. PKINIT with a TPM-backed key is PKINIT with a TPM-backed key. So the cloud, correctly, reports one thing: "Windows Hello for Business."</p>
+<p>A password is the odd one out — it never touches that key, which is why Entra <em>can</em> separate "Password" from "WHFB". But it still can't split the three gestures.</p>
+
+<div class="callout-blue"><strong>Note:</strong> This means the answer can only exist <strong>locally, on the device</strong> — at the moment the gesture unlocks the key, before anything leaves the machine. That's where we have to look.</div>
+
+<p>First, let me confirm what we're dealing with. On a hybrid cloud trust device, <code>dsregcmd /status</code> is the source of truth:</p>
+
+<div class="terminal">
+  <div class="terminal-bar">
+    <div class="terminal-dot" style="background:#ef4444"></div>
+    <div class="terminal-dot" style="background:#f59e0b"></div>
+    <div class="terminal-dot" style="background:#22c55e"></div>
+    <span class="terminal-title">Command Prompt (Administrator)</span>
+  </div>
+  <div class="terminal-body">
+    <div><span class="prompt">C:\&gt;</span> <span class="cmd">dsregcmd /status</span></div>
+    <div class="out">             AzureAdJoined : <span class="hit">YES</span></div>
+    <div class="out">              DomainJoined : <span class="hit">YES</span></div>
+    <div class="out">                    NgcSet : <span class="hit">YES</span></div>
+    <div class="out">               KeyProvider : Microsoft Platform Crypto Provider</div>
+    <div class="out">              TpmProtected : <span class="hit">YES</span></div>
+    <div class="out">                 OnPremTgt : <span class="hit">YES</span></div>
+    <div class="out">                  CloudTgt : <span class="hit">YES</span></div>
+  </div>
+</div>
+
+<p><code>AzureAdJoined: YES</code> + <code>DomainJoined: YES</code> = hybrid joined. <code>OnPremTgt</code> + <code>CloudTgt</code> = cloud trust. <code>NgcSet: YES</code> = Windows Hello is provisioned, TPM-backed. Good — this is the scenario we care about.</p>
+
+<h2>Where the data actually lives: three event logs</h2>
+<p>There is no single "Windows Hello usage" log. The answer is scattered across <strong>three</strong> logs, and you have to stitch them together. Here they are, with full paths so you can open them yourself in Event Viewer.</p>
+
+<table class="kv">
+  <tr><th>What it tells you</th><th>Log (Applications and Services Logs &rsaquo; Microsoft &rsaquo; Windows &rsaquo; …)</th></tr>
+  <tr><td>Face / fingerprint was used</td><td class="mono">Biometrics &rsaquo; Operational</td></tr>
+  <tr><td>The Hello key was used (PIN or biometric)</td><td class="mono">HelloForBusiness &rsaquo; Operational</td></tr>
+  <tr><td>A sign-in / unlock happened at all</td><td class="mono">Security (Windows Logs)</td></tr>
+</table>
+
+<p>The <em>enrollment</em> side (what's set up) is even simpler — it's a single registry value, a bitmask under the user's SID:</p>
+
+<div class="evt">
+  <div class="evt-head" style="background:#374151">Registry Editor</div>
+  <div class="evt-body">
+    <div style="color:#1d4ed8">HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WinBio\AccountInfo\&lt;SID&gt;</div>
+    <div style="margin-left:18px"><span style="color:#7c3aed">EnrolledFactors</span> &nbsp;<span class="lbl">REG_DWORD</span>&nbsp; <span style="color:#059669">0x0000000A&nbsp;&nbsp;(10)</span></div>
+  </div>
+</div>
+
+<p><code>EnrolledFactors</code> is a bitmask of the Windows Biometric Framework factor types:</p>
+<table class="kv">
+  <tr><th>Bit</th><th>Factor</th></tr>
+  <tr><td class="mono">0x02</td><td>Face (facial features)</td></tr>
+  <tr><td class="mono">0x04</td><td>Voice</td></tr>
+  <tr><td class="mono">0x08</td><td>Fingerprint</td></tr>
+  <tr><td class="mono">0x10</td><td>Iris</td></tr>
+</table>
+<p>Our value is <code>10</code> = <code>0x08 | 0x02</code> = <strong>fingerprint + face enrolled</strong>. That's exact, no guessing. But enrollment is only half the question. The hard part is <em>usage</em> — which gesture they actually used. That's where the detective work started.</p>
+
+<h2>The detective work: from "everything is PIN" to four clean methods</h2>
+
+<h3>Clue 1 — Fingerprint is easy. It announces itself.</h3>
+<p>Open the Biometrics Operational log. Every successful fingerprint match writes an <strong>Event ID 1004</strong>, and it <em>names the sensor</em>:</p>
+
+<div class="evt">
+  <div class="evt-head" style="background:#059669">ℹ Information — Event ID 1004 — Biometrics/Operational</div>
+  <div class="evt-body">
+    <div><span class="lbl">Message:</span> The Windows Biometric Service successfully</div>
+    <div>identified [user] using sensor: <span style="color:#059669">Goodix MOC Fingerprint</span></div>
+    <div>(USB\VID_27C6&amp;PID_6594\...).</div>
+  </div>
+</div>
+
+<p>So fingerprint = an <code>1004</code> event with a fingerprint sensor name. Done. I built the first version of the script on that, plus the Security log for logons, and a simple rule: "if there's a Hello key event near the logon, it's PIN, otherwise password." I gave it a generous ±90 second window to be safe.</p>
+<p>That was the mistake.</p>
+
+<div class="callout-red"><strong>Watch out:</strong> The <code>HelloForBusiness/Operational</code> log is <em>noisy</em>. The Hello key gets touched constantly in the background — SSO, key reads, protector writes (Event <code>5702</code>) fire dozens of times an hour. With a ±90s window, <strong>every</strong> sign-in had a Hello event nearby. The script proudly reported everything as PIN. Password sign-ins vanished.</p>
+
+<h3>Clue 2 — Get the real anchor: the unlock event</h3>
+<p>The fix for the noise was to stop guessing from loose timing and anchor on the <em>exact</em> moment of a sign-in. The Security log has two anchors:</p>
+<ul>
+  <li><strong>Event 4624</strong> — an account was logged on (Type 2 = interactive, Type 11 = cached)</li>
+  <li><strong>Event 4801</strong> — the workstation was unlocked</li>
+</ul>
+<p>But when I tested it, the unlock events weren't there. The lock screen unlocks I'd just done produced <em>nothing</em> in the Security log. Here's why:</p>
+
+<div class="terminal">
+  <div class="terminal-bar">
+    <div class="terminal-dot" style="background:#ef4444"></div>
+    <div class="terminal-dot" style="background:#f59e0b"></div>
+    <div class="terminal-dot" style="background:#22c55e"></div>
+    <span class="terminal-title">Command Prompt (Administrator)</span>
+  </div>
+  <div class="terminal-body">
+    <div><span class="prompt">C:\&gt;</span> <span class="cmd">auditpol /get /subcategory:"Other Logon/Logoff Events"</span></div>
+    <div class="out">System audit policy</div>
+    <div class="out">Category/Subcategory                  Setting</div>
+    <div class="out">Logon/Logoff</div>
+    <div class="out">  Other Logon/Logoff Events           <span class="hit">No Auditing</span></div>
+  </div>
+</div>
+
+<div class="callout-amber"><strong>Gotcha:</strong> Workstation lock/unlock auditing (Events 4800/4801) is <strong>off by default</strong>. Face and fingerprint still get logged — the Biometric service writes its own log regardless of audit policy — but a <strong>PIN or password used to unlock the lock screen leaves no trace at all</strong> until you turn this on.</p></div>
+
+<p>One command fixes it (admin):</p>
+<pre><span class="c"># Enable unlock auditing so PIN/password unlocks get recorded going forward</span>
+auditpol /set /subcategory:<span class="s">"Other Logon/Logoff Events"</span> /success:enable</pre>
+
+<div class="callout-blue"><strong>Note:</strong> This is retroactive to <em>nothing</em> — it only captures unlocks from the moment you enable it. On a managed device the audit policy is usually pushed by GPO/Intune anyway, so for a fleet you set this centrally (that's a topic for the next post).</p></div>
+
+<h3>Clue 3 — The face mystery: why face kept showing up as PIN</h3>
+<p>With auditing on, I locked the screen and deliberately signed in with <strong>password, then PIN, then face</strong>. The script reported: PIN, Password, Password… and the face unlock came back as <strong>PIN</strong>. Face was being misread.</p>
+<p>So I dumped every event in the 3-minute window — Security, Biometrics and HelloForBusiness side by side. This is the line-up that cracked it:</p>
+
+<div class="ps-window">
+  <div class="ps-bar">
+    <div class="terminal-dot" style="background:#ef4444"></div>
+    <div class="terminal-dot" style="background:#f59e0b"></div>
+    <div class="terminal-dot" style="background:#22c55e"></div>
+    <span class="ps-title">Windows PowerShell — event timeline around one "face" unlock</span>
+  </div>
+  <div class="ps-body">Time      Log         Id    What it means
+--------  ---------   ----  ----------------------------------------
+16:13:09  Biometric   <span class="ok">1702</span>  "successfully unprotected data for user"
+16:13:09  Biometric   1605  "secure component successfully authorized"
+16:13:09  Hello       5702  Hello key protector written
+16:13:09  Security    <span class="warn">4801</span>  workstation unlocked
+<span class="warn">  (no 1004 'identified' event anywhere)</span></div>
+</div>
+
+<p>There it was. A face unlock produces <strong>Event 1702</strong> ("unprotected data") and <strong>1605</strong> ("authorized") — but <strong>no 1004</strong>. Fingerprint raises 1004; face on this hardware does <em>not</em>. My script only looked for 1004, so face fell through… and because face <em>also</em> tickles the Hello key (5702), it landed in the PIN bucket.</p>
+<p>Compare a PIN-only unlock — same Hello key event, but the Biometric service stays silent:</p>
+
+<div class="ps-window">
+  <div class="ps-bar">
+    <div class="terminal-dot" style="background:#ef4444"></div>
+    <div class="terminal-dot" style="background:#f59e0b"></div>
+    <div class="terminal-dot" style="background:#22c55e"></div>
+    <span class="ps-title">Windows PowerShell — a PIN unlock vs a Password unlock</span>
+  </div>
+  <div class="ps-body">16:11:17  Hello       5702  Hello key used        <span class="ok">→ PIN</span>
+16:11:17  Security    4801  workstation unlocked
+
+16:11:41  Security    4801  workstation unlocked  <span class="warn">→ Password</span>
+<span class="warn">  (no Hello key, no biometric — nothing but the unlock)</span></div>
+</div>
+
+<p>That's the whole puzzle solved. Each method leaves a distinct fingerprint across the three logs.</p>
+
+<h2>The classification rules (validated on real hardware)</h2>
+<p>For every anchor (a <code>4624</code> logon or a <code>4801</code> unlock), look at what fired within a <strong>tight</strong> window (a few seconds — not 90):</p>
+
+<table class="kv">
+  <tr><th>Method</th><th>Signal at the moment of sign-in</th></tr>
+  <tr><td><strong>Fingerprint</strong></td><td>Biometrics <code>1004</code> "identified" (names the fingerprint sensor)</td></tr>
+  <tr><td><strong>Face</strong></td><td>Biometrics <code>1702</code> "unprotected data" <em>with no</em> <code>1004</code></td></tr>
+  <tr><td><strong>PIN</strong></td><td>HelloForBusiness <code>5702</code>/<code>5205</code> key use, <em>but no biometric</em></td></tr>
+  <tr><td><strong>Password</strong></td><td>An unlock/logon with <em>neither</em> biometric <em>nor</em> Hello key</td></tr>
+</table>
+
+<div class="callout-green"><strong>Tip:</strong> Order matters. Check 1004 (fingerprint) first, then 1702 (face), then the Hello key (PIN), then fall through to password. Fingerprint also raises 1702, so if you check 1702 first you'll mislabel fingerprint as face. The periodic <code>1608</code>/<code>1019</code> events are just the sensor idling — ignore them entirely.</p></div>
+
+<h2>How to verify it yourself</h2>
+<p>Before trusting any script, confirm the raw signals on your own device. Run this as administrator — it shows today's biometric hits straight from the source:</p>
+
+<pre><span class="c"># Every successful biometric sign-in today, with the sensor name</span>
+<span class="k">Get-WinEvent</span> -FilterHashtable @{
+    LogName=<span class="s">'Microsoft-Windows-Biometrics/Operational'</span>; Id=<span class="v">1004</span>;
+    StartTime=(Get-Date).Date
+} | <span class="k">Select-Object</span> TimeCreated, Message</pre>
+
+<pre><span class="c"># Today's unlocks (needs the audit setting enabled, run as admin)</span>
+<span class="k">Get-WinEvent</span> -FilterHashtable @{LogName=<span class="s">'Security'</span>; Id=<span class="v">4801</span>; StartTime=(Get-Date).Date}</pre>
+
+<div class="callout-blue"><strong>Note:</strong> These logs are admin-protected. Run PowerShell elevated. The full script below also needs admin because it reads the Security log — the only place password sign-ins are recorded.</p></div>
+
+<h2>The script: Get-TodayLogons.ps1</h2>
+<p>This is the heart of it — the classifier, applied to every sign-in and unlock today. It anchors on the Security log, classifies each anchor against the biometric and Hello signals, and also adds biometric sign-ins that happened before unlock auditing was on (so your fingerprint history isn't lost).</p>
+
+<pre><span class="c"># Get-TodayLogons.ps1  (READ-ONLY, run as Administrator)</span>
+<span class="c"># Fingerprint=1004 | Face=1702 w/o 1004 | PIN=Hello key only | Password=nothing</span>
+
+<span class="k">$sid</span>   = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+<span class="k">$start</span> = (Get-Date).Date
+
+<span class="c"># --- the three signal sources ---</span>
+<span class="k">$fp</span> = Get-WinEvent @{LogName=<span class="s">'...Biometrics/Operational'</span>; Id=<span class="v">1004</span>; StartTime=$start} |
+      % { [pscustomobject]@{ Time=$_.TimeCreated; IsFinger=($_.Message -match <span class="s">'fingerprint|MOC'</span>) } }
+<span class="k">$faceAuth</span> = (Get-WinEvent @{LogName=<span class="s">'...Biometrics/Operational'</span>; Id=<span class="v">1702</span>; StartTime=$start}).TimeCreated
+<span class="k">$hello</span>    = (Get-WinEvent @{LogName=<span class="s">'...HelloForBusiness/Operational'</span>; Id=<span class="v">5205,5702</span>; StartTime=$start}).TimeCreated
+
+<span class="c"># --- anchors: real unlock/logon moments from the Security log ---</span>
+<span class="k">$anchors</span> = Get-WinEvent @{LogName=<span class="s">'Security'</span>; Id=<span class="v">4624,4801</span>; StartTime=$start} | <span class="c">... (filter to this user)</span>
+
+<span class="k">function</span> Near($t,$set,$sec){ @($set | ? { [math]::Abs(($t-$_).TotalSeconds) -le $sec }).Count -gt 0 }
+
+<span class="c"># --- classify each sign-in / unlock ---</span>
+<span class="k">foreach</span>($a in $anchors){
+    $t = $a.Time
+    $f = $fp | ? { [math]::Abs(($t-$_.Time).TotalSeconds) -le <span class="v">8</span> } | select -First 1
+    $method = <span class="k">if</span>($f){ <span class="k">if</span>($f.IsFinger){<span class="s">'Fingerprint'</span>}<span class="k">else</span>{<span class="s">'Face'</span>} }
+              <span class="k">elseif</span>(Near $t $faceAuth <span class="v">5</span>){ <span class="s">'Face'</span> }
+              <span class="k">elseif</span>(Near $t $hello    <span class="v">8</span>){ <span class="s">'PIN'</span> }
+              <span class="k">else</span>{ <span class="s">'Password'</span> }
+    <span class="c"># ...emit { Date; Time; Method }</span>
+}</pre>
+
+<div class="callout-green"><strong>Tip:</strong> The <code>-le 8</code> and <code>-le 5</code> second windows are the fix for the original "everything is PIN" bug. A PIN unlock fires its Hello key event at the <em>same second</em> as the unlock; the background noise is always tens of seconds away. Keep the window tight.</p></div>
+
+<h2>Proof it worked</h2>
+<p>Here's the output after locking and unlocking with every method during testing. Fingerprint history from earlier in the day, then the deliberate face/PIN/password tests — all four, correctly identified, with the exact time and date:</p>
+
+<div class="ps-window">
+  <div class="ps-bar">
+    <div class="terminal-dot" style="background:#ef4444"></div>
+    <div class="terminal-dot" style="background:#f59e0b"></div>
+    <div class="terminal-dot" style="background:#22c55e"></div>
+    <span class="ps-title">PS C:\&gt; .\Get-TodayLogons.ps1</span>
+  </div>
+  <div class="ps-body">=== Sign-ins (TODAY) ===
+
+Date         Time      Method        Source
+----         ----      ------        ------
+2026-06-29   04:33:08  <span class="ok">Fingerprint</span>   Logon  (Security log)
+2026-06-29   08:00:44  <span class="ok">Fingerprint</span>   Biometric (sign-in/unlock)
+2026-06-29   10:06:27  <span class="ok">Fingerprint</span>   Biometric (sign-in/unlock)
+2026-06-29   14:07:00  <span class="ok">Fingerprint</span>   Biometric (sign-in/unlock)
+2026-06-29   15:49:34  <span class="ok">Fingerprint</span>   Biometric (sign-in/unlock)
+2026-06-29   16:10:51  Face          Unlock (Security log)
+2026-06-29   16:10:58  Face          Unlock (Security log)
+2026-06-29   16:11:17  <span class="warn">PIN</span>           Unlock (Security log)
+2026-06-29   16:11:41  Password      Unlock (Security log)
+2026-06-29   16:12:34  Password      Unlock (Security log)
+2026-06-29   16:13:09  Face          Unlock (Security log)
+2026-06-29   16:22:44  Face          Unlock (Security log)</div>
+</div>
+
+<p>That is the report Microsoft doesn't give you: <strong>face, fingerprint, PIN and password, per sign-in, with timestamps</strong> — generated entirely from data already sitting on the device.</p>
+
+<div class="callout-red"><strong>Watch out:</strong> Two requirements for the password/PIN rows to be complete — (1) run as <strong>administrator</strong> (the Security log is admin-only), and (2) <strong>unlock auditing must be enabled</strong>. Face and fingerprint are always captured because the Biometric service logs them independently.</p></div>
+
+<h2>What's next</h2>
+<div class="next-card">
+  <span class="tag">Part 2 — coming next</span>
+  <span class="tag">Intune</span>
+  <span class="tag">Graph API</span>
+  <span class="tag">Web app</span>
+  <h3>From one laptop to the whole fleet</h3>
+  <p>This post was deliberately scoped to <strong>one device, run by hand</strong>. In the next post I'll turn this exact classifier into an <strong>Intune remediation (detection) script</strong> that runs as SYSTEM on every device and reports a single line per machine — then push the unlock-audit policy fleet-wide so PIN and password are captured everywhere.</p>
+  <p>After that: wire the collected data into a small <strong>web app that pulls live results through the Microsoft Graph API</strong>, so instead of CSV exports you get a live dashboard of exactly which Hello gesture every user is really using.</p>
+</div>
+
+<p>The mechanism never changes — fingerprint shouts <code>1004</code>, face whispers <code>1702</code>, PIN only moves the Hello key, and a password moves nothing. Once you know that, the rest is just plumbing.</p>
+
+</article>
+</div>
+
+<footer>
+  <div class="wrap">
+    <strong style="color:#fff">EndpointWeekly</strong> — deep dives for Microsoft endpoint &amp; identity engineers.<br>
+    Written in the spirit of <a href="https://call4cloud.nl">call4cloud.nl</a>: trace the mechanism, show the log line, prove the fix.<br>
+    <span style="color:#6ee7b7">Part 1 of a series · Windows Hello for Business gesture reporting · Hybrid Cloud Trust</span>
+  </div>
+</footer>
+
+</body>
+</html>
